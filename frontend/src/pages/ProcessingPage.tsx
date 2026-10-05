@@ -3,13 +3,23 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, CheckCircle2, ArrowRight } from 'lucide-react'
 import { useAnalysis } from '@/contexts/AnalysisContext'
 
-const PIPELINE_STAGES = [
+const PDF_STAGES = [
   { id: 'UPLOADING', label: 'PDF Document Upload', desc: 'Validating the PDF in temporary request memory' },
-  { id: 'EXTRACTING', label: 'PDF Section & Table Extraction', desc: 'Scanning PDF tables using the existing extraction pipeline' },
+  { id: 'EXTRACTING', label: 'PDF Section & Table Extraction', desc: 'Scanning PDF pages and tables using the PDF extraction pipeline' },
   { id: 'OCR', label: 'OCR Fallback Scanning', desc: 'Running per-page OCR on scanned pages' },
   { id: 'PARSING', label: 'Transaction Parsing', desc: 'Structuring transfers, ATM, POS, and cash records' },
   { id: 'NORMALIZING', label: 'Data Normalization', desc: 'Standardizing dates, amounts, and IFSC codes' },
-  { id: 'LAYER_ANALYSIS', label: 'Layer Graph Traversal', desc: 'Computing money-flow layers and source pages' },
+  { id: 'LAYER_ANALYSIS', label: 'NCRP Layer Mapping', desc: 'Applying the Layer values printed in the document and its source pages' },
+  { id: 'COMPLETED', label: 'Money Trail Graph Construction', desc: 'Building the Full View and Reveal Mode graph' },
+]
+
+const EXCEL_STAGES = [
+  { id: 'UPLOADING', label: 'Workbook Upload', desc: 'Validating the .xlsx workbook in temporary request memory' },
+  { id: 'EXTRACTING', label: 'Sheet & Section Extraction', desc: 'Reading every NCRP worksheet (Money Transfer to, withdrawals, other sheets)' },
+  { id: 'OCR', label: 'Money Transfer to Parsing', desc: 'Reading account-to-account rows and their NCRP Layer values' },
+  { id: 'PARSING', label: 'Transaction Parsing', desc: 'Structuring transfers, ATM, AEPS, cheque, POS, and cash records' },
+  { id: 'NORMALIZING', label: 'Data Normalization', desc: 'Standardizing dates, amounts, IFSC codes, and disputed amounts' },
+  { id: 'LAYER_ANALYSIS', label: 'NCRP Layer Mapping', desc: 'Applying the Layer values printed in the workbook sheets' },
   { id: 'COMPLETED', label: 'Money Trail Graph Construction', desc: 'Building the Full View and Reveal Mode graph' },
 ]
 
@@ -20,6 +30,9 @@ export function ProcessingPage() {
   const { analysis } = useAnalysis()
   const [currentStageIndex, setCurrentStageIndex] = useState(0)
 
+  const isExcel = analysis?.case?.document_type === 'EXCEL'
+  const pipelineStages = isExcel ? EXCEL_STAGES : PDF_STAGES
+
   useEffect(() => {
     if (!analysis || analysis.analysis_id !== caseId) navigate('/cases/upload', { replace: true })
   }, [analysis, caseId, navigate])
@@ -27,7 +40,7 @@ export function ProcessingPage() {
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentStageIndex((previous) => {
-        if (previous >= PIPELINE_STAGES.length - 1) {
+        if (previous >= pipelineStages.length - 1) {
           clearInterval(interval)
           return previous
         }
@@ -35,17 +48,19 @@ export function ProcessingPage() {
       })
     }, 600)
     return () => clearInterval(interval)
-  }, [])
+  }, [pipelineStages.length])
 
-  const currentStage = PIPELINE_STAGES[currentStageIndex]
-  const isFinished = currentStageIndex >= PIPELINE_STAGES.length - 1
-  const progressPercent = isFinished ? 100 : Math.round(((currentStageIndex + 1) / PIPELINE_STAGES.length) * 100)
+  const currentStage = pipelineStages[currentStageIndex]
+  const isFinished = currentStageIndex >= pipelineStages.length - 1
+  const progressPercent = isFinished ? 100 : Math.round(((currentStageIndex + 1) / pipelineStages.length) * 100)
 
   return (
     <div className="max-w-3xl mx-auto flex flex-col gap-5 py-4">
       <div>
         <div className="flex items-center gap-2">
-          <h1 className="text-xl font-black text-slate-900 tracking-tight">Processing PDF</h1>
+          <h1 className="text-xl font-black text-slate-900 tracking-tight">
+            {isExcel ? 'Processing Excel Workbook' : 'Processing PDF'}
+          </h1>
           <span className="text-2xs font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
             {caseId}
           </span>
@@ -79,7 +94,7 @@ export function ProcessingPage() {
 
         {/* Stage List */}
         <div className="space-y-2.5 pt-4 border-t border-slate-100">
-          {PIPELINE_STAGES.map((stage, index) => {
+          {pipelineStages.map((stage, index) => {
             const isDone = index < currentStageIndex || (isFinished && index === currentStageIndex)
             const isCurrent = index === currentStageIndex && !isFinished
             return (

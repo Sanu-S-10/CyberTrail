@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   BarChart3, Download, FileText, Loader2, AlertTriangle,
-  ShieldCheck, Layers, Users, ReceiptText, Network, Upload,
+  ShieldCheck, Layers, Users, ReceiptText, Network, Upload, Landmark,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAnalysis } from '@/contexts/AnalysisContext'
@@ -237,8 +237,10 @@ async function generateFullPDF(analysis: any, graphDataUrl: string | null) {
     accounts.find((a: any) => a.layer === 0)?.account_number || '—'
   const victimBank = caseData.victim_bank || caseData.victimBank ||
     accounts.find((a: any) => a.layer === 0)?.bank_name || '—'
-  const fraudAmt = caseData.total_fraud_amount
-    ? fmtCurrency(parseFloat(caseData.total_fraud_amount)) : '—'
+  const fraudAmt = (caseData.reported_fraud_amount ?? caseData.total_fraud_amount)
+    ? fmtCurrency(parseFloat(caseData.reported_fraud_amount ?? caseData.total_fraud_amount)) : '—'
+
+
   const caseNo = caseData.case_number || '—'
   const ackNo = caseData.acknowledgement_no || '—'
   const fileName = caseData.file_name || '—'
@@ -268,8 +270,10 @@ async function generateFullPDF(analysis: any, graphDataUrl: string | null) {
   // Summary boxes row
   const boxW = (CW - 3) / 4
   const summaryBoxes = [
-    { label: 'TOTAL FRAUD AMOUNT', val: fraudAmt, textC: '#dc2626', bg: '#FEF2F2', border: '#FECACA' },
-    { label: 'TOTAL ACCOUNTS', val: `${accounts.length}`, textC: '#059669', bg: '#ECFDF5', border: '#A7F3D0' },
+    { label: 'REPORTED FRAUD AMOUNT', val: caseData.reported_fraud_amount ? fmtCurrency(parseFloat(caseData.reported_fraud_amount)) : '—', textC: '#dc2626', bg: '#FEF2F2', border: '#FECACA' },
+    { label: 'TOTAL DISPUTED AMOUNT', val: caseData.total_disputed_amount ? fmtCurrency(parseFloat(caseData.total_disputed_amount)) : fraudAmt, textC: '#d97706', bg: '#FFFBEB', border: '#FDE68A' },
+    { label: 'TRANSFER ACCOUNTS', val: `${caseData.total_transfer_accounts ?? accounts.filter((a:any) => a.account_type !== 'ATM' && a.account_type !== 'POS' && a.account_type !== 'CASH').length}`, textC: '#059669', bg: '#ECFDF5', border: '#A7F3D0' },
+    { label: 'WITHDRAWAL EVENTS', val: `${caseData.withdrawal_event_count ?? (analysis?.withdrawals?.length ?? 0)}`, textC: '#7c3aed', bg: '#F5F3FF', border: '#DDD6FE' },
     { label: 'TOTAL TRANSACTIONS', val: `${transactions.length}`, textC: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE' },
     { label: 'MAX LAYER DEPTH', val: `Layer ${maxLayer}`, textC: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' },
   ]
@@ -457,8 +461,8 @@ export function ReportsPage() {
   const transactions: any[] = analysis?.transactions || []
   const layers: number[] = analysis?.layers || []
   const maxLayer = layers.length > 0 ? Math.max(...layers) : 0
-  const fraudAmt = caseData.total_fraud_amount
-    ? fmtCurrency(parseFloat(caseData.total_fraud_amount)) : '—'
+  const fraudAmt = (caseData.reported_fraud_amount ?? caseData.total_fraud_amount)
+    ? fmtCurrency(parseFloat(caseData.reported_fraud_amount ?? caseData.total_fraud_amount)) : '—'
 
   // Victim info with fallbacks
   const victimName =
@@ -560,8 +564,9 @@ export function ReportsPage() {
           {/* ── Summary stat cards ── */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { icon: ShieldCheck, label: 'Fraud Amount',      value: fraudAmt,            color: 'text-red-600 dark:text-red-400',    bg: 'bg-red-50 dark:bg-red-900/20',     border:'border-red-100 dark:border-red-800/40'     },
-              { icon: Users,       label: 'Total Accounts',    value: `${accounts.length}`, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20', border:'border-emerald-100 dark:border-emerald-800/40' },
+              { icon: ShieldCheck, label: 'Reported Fraud Amount',      value: caseData.reported_fraud_amount ? fraudAmt : 'Not available in source', color: 'text-red-600 dark:text-red-400',    bg: 'bg-red-50 dark:bg-red-900/20',     border:'border-red-100 dark:border-red-800/40'     },
+              { icon: Users,       label: 'Transfer Accounts',    value: `${caseData.total_transfer_accounts ?? accounts.filter((a:any) => a.account_type !== 'ATM' && a.account_type !== 'POS' && a.account_type !== 'CASH').length}`, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20', border:'border-emerald-100 dark:border-emerald-800/40' },
+              { icon: Landmark,    label: 'Withdrawal Events',    value: `${caseData.withdrawal_event_count ?? (analysis?.withdrawals?.length ?? 0)}`, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-900/20', border:'border-purple-100 dark:border-purple-800/40' },
               { icon: ReceiptText, label: 'Transactions',      value: `${transactions.length}`, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-50 dark:bg-blue-900/20', border:'border-blue-100 dark:border-blue-800/40'    },
               { icon: Layers,      label: 'Max Layer Depth',   value: `Layer ${maxLayer}`, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-900/20', border:'border-purple-100 dark:border-purple-800/40' },
             ].map(({ icon: Icon, label, value, color, bg, border }) => (

@@ -5,7 +5,7 @@ section detection, and table extraction for complaint PDFs.
 """
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from app.parsers.pdf_extractor import pdf_extractor
 from app.parsers.section_detector import section_detector

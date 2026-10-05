@@ -20,7 +20,8 @@ const LAYER_EDGE_COLORS = [
   '#06B6D4', // L12 cyan
 ]
 
-function layerColor(layer: number) {
+function layerColor(layer: number | null) {
+  if (layer === null || layer === 0) return '#94A3B8'
   const l = Math.max(layer, 1)
   return LAYER_EDGE_COLORS[(l - 1) % LAYER_EDGE_COLORS.length]
 }
@@ -52,7 +53,7 @@ export function TransactionExplorerPage() {
       bank: tx.bank_name || tx.destination_bank || '—',
       amount: Number(tx.amount || 0),
       type: tx.transaction_type || 'ACCOUNT_TRANSFER',
-      layer: Number(tx.layer ?? 0),
+      layer: tx.layer === null || tx.layer === undefined ? null : Number(tx.layer),
       utr: tx.utr_rrn || tx.transaction_id || '—',
     }))
     const withdrawals = (analysis.withdrawals || []).map((w: any) => ({
@@ -63,20 +64,29 @@ export function TransactionExplorerPage() {
       bank: w.bank_name || '—',
       amount: Number(w.amount || 0),
       type: w.withdrawal_type || 'WITHDRAWAL',
-      layer: Number(w.layer ?? 0),
+      layer: w.layer === null || w.layer === undefined ? null : Number(w.layer),
       utr: w.utr_rrn || '—',
     }))
     return [...transfers, ...withdrawals]
   }, [analysis])
 
+  // Layers come from the analysed document's own layer values only
+  const officialLayers = (analysis?.graph as any)?.document_layers as number[] | undefined
   const allLayers = useMemo(() => {
-    const set = new Set(transactionData.map((t) => t.layer))
+    if (Array.isArray(officialLayers) && officialLayers.length > 0) {
+      return [...officialLayers].map(Number).sort((a, b) => a - b)
+    }
+    const set = new Set<number>(transactionData.map((t) => t.layer).filter((value): value is number => typeof value === 'number' && value > 0))
     return [...set].sort((a, b) => a - b)
-  }, [transactionData])
+  }, [transactionData, officialLayers])
+  const maxOfficialLayer = allLayers.length ? allLayers[allLayers.length - 1] : 0
+  const unstatedLayerCount = transactionData.filter((t) => t.layer === null).length
 
   const filtered = useMemo(() => {
     return transactionData.filter((tx) => {
-      if (layerFilter !== 'ALL' && tx.layer !== parseInt(layerFilter)) return false
+      if (layerFilter === 'VICTIM' && tx.layer !== 0) return false
+      if (layerFilter === 'UNSTATED' && tx.layer !== null) return false
+      if (layerFilter !== 'ALL' && layerFilter !== 'VICTIM' && layerFilter !== 'UNSTATED' && tx.layer !== parseInt(layerFilter)) return false
       if (typeFilter !== 'ALL' && tx.type !== typeFilter) return false
       if (query.trim()) {
         const q = query.toLowerCase()
@@ -91,13 +101,28 @@ export function TransactionExplorerPage() {
     })
   }, [query, layerFilter, typeFilter, transactionData])
 
+  function escapeCSVValue(value: unknown): string {
+    const text = value === null || value === undefined ? '' : String(value)
+    if (/[",\r\n]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`
+    }
+    return text
+  }
+
   function exportCSV() {
-    const headers = ['Date', 'From Account', 'To Account', 'Bank', 'Amount', 'Type', 'Layer', 'UTR']
+    const headers = ['Date', 'From Account', 'To Account', 'Bank', 'Amount', 'Type', 'NCRP Layer', 'UTR / Reference']
     const rows = filtered.map((t) => [
-      t.date, t.from, t.to, `"${t.bank}"`, t.amount, t.type, `L${t.layer}`, t.utr,
+      escapeCSVValue(t.date),
+      escapeCSVValue(t.from),
+      escapeCSVValue(t.to),
+      escapeCSVValue(t.bank),
+      escapeCSVValue(t.amount),
+      escapeCSVValue(t.type),
+      escapeCSVValue(t.type === 'ACCOUNT_TRANSFER' ? (t.layer === null || t.layer === 0 ? 'Victim / Origin' : `Layer ${t.layer}`) : 'Withdrawal (no layer)'),
+      escapeCSVValue(t.utr),
     ])
-    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -150,10 +175,16 @@ export function TransactionExplorerPage() {
           onChange={(e) => setLayerFilter(e.target.value)}
           className="rounded-xl border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none"
         >
-          <option value="ALL">All Layers (L1–L{allLayers.length || 5})</option>
+          <option value="ALL">
+            All NCRP Layers{allLayers.length ? ` (Layer 1–Layer ${maxOfficialLayer})` : ''}
+          </option>
+          <option value="VICTIM">Victim / Origin</option>
           {allLayers.map((l) => (
             <option key={l} value={String(l)}>Layer {l}</option>
           ))}
+          {unstatedLayerCount > 0 && (
+            <option value="UNSTATED">Not stated in source ({unstatedLayerCount})</option>
+          )}
         </select>
 
         <select
@@ -166,6 +197,8 @@ export function TransactionExplorerPage() {
           <option value="WALLET_TRANSFER">Wallet Transfer</option>
           <option value="ATM_WITHDRAWAL">ATM Withdrawal</option>
           <option value="POS_WITHDRAWAL">POS Purchase</option>
+          <option value="CHEQUE_WITHDRAWAL">Cheque Withdrawal</option>
+          <option value="AEPS_WITHDRAWAL">AEPS Withdrawal</option>
           <option value="CASH_WITHDRAWAL">Cash Withdrawal</option>
         </select>
       </div>
@@ -249,7 +282,13 @@ export function TransactionExplorerPage() {
                             border: `1px solid ${lColor}40`,
                           }}
                         >
-                          L{tx.layer}
+                          {tx.type === 'ACCOUNT_TRANSFER'
+                            ? tx.layer === null
+                              ? 'Not stated'
+                              : tx.layer === 0
+                                ? 'Victim / Origin'
+                                : `Layer ${tx.layer}`
+                            : 'Withdrawal'}
                         </span>
                       </td>
 

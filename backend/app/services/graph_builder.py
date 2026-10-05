@@ -1,9 +1,13 @@
-"""Build a directed, account-based money-trail graph with aggregated edges."""
+"""Build a directed, account-based money-trail graph with aggregated edges.
+
+Layer handling: the graph never invents or reorders NCRP layers. Node layers
+come from the source document, edges keep the layers of the transactions they
+aggregate, and validation only reports genuine source-data integrity issues.
+"""
 
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from typing import Any, Optional
 
 import networkx as nx
@@ -36,7 +40,9 @@ class GraphBuilder:
                 holder_name=acc.get("holder_name"),
                 account_type=acc.get("account_type", "SAVINGS"),
                 layer=acc_layer,
+                document_layers=list(acc.get("document_layers") or []),
                 layer_source=acc.get("layer_source"),
+                layer_reason=acc.get("layer_reason", ""),
                 layer_conflict=acc.get("layer_conflict", False),
                 is_suspicious=acc.get("is_suspicious", False),
                 total_incoming=0.0,
@@ -65,24 +71,31 @@ class GraphBuilder:
                     "amount": 0.0,
                     "transaction_count": 0,
                     "transactions": [],
+                    "layers": [],
                     "utr_rrn": tx.get("utr_rrn"),
                     "transaction_type": tx.get("transaction_type"),
                     "source_page": tx.get("source_page", 1),
+                    "source_sheet": tx.get("source_sheet"),
                 },
             )
             bucket["amount"] += amount
             bucket["transaction_count"] += 1
+            tx_layer = tx.get("layer")
+            if tx_layer is not None and int(tx_layer) not in bucket["layers"]:
+                bucket["layers"].append(int(tx_layer))
             bucket["transactions"].append(
                 {
                     "id": tx.get("id"),
                     "amount": amount,
                     "utr_rrn": tx.get("utr_rrn"),
                     "transaction_date": tx.get("transaction_date") or tx.get("raw_date"),
+                    "layer": tx_layer,
                     "source_page": tx.get("source_page"),
+                    "source_sheet": tx.get("source_sheet"),
                 }
             )
             if tx.get("utr_rrn"):
-                bucket["utr_rrn"] = tx.get("utr_rrn")
+                bucket["utr_rrn"] = tx["utr_rrn"]
 
             G.nodes[src]["total_outgoing"] += amount
             G.nodes[src]["outgoing_count"] += 1
@@ -96,27 +109,22 @@ class GraphBuilder:
         for (src, dst), data in aggregated.items():
             G.add_edge(src, dst, **data)
 
-        known_layers = [data.get("layer") for _, data in G.nodes(data=True) if data.get("layer") is not None]
-        max_known_layer = max(known_layers, default=0)
+        document_layers = sorted(
+            {
+                int(value)
+                for _, data in G.nodes(data=True)
+                for value in (data.get("document_layers") or [])
+                if int(value) > 0
+            }
+        )
 
         nodes_payload = []
         for n_id, data in G.nodes(data=True):
-            effective_layer = data.get("layer")
+            data = dict(data)
             account_type = str(data.get("account_type") or "").upper()
             is_cash_out_type = account_type in CASHOUT_TYPES
-
-            if effective_layer is None:
-                if is_cash_out_type:
-                    effective_layer = None
-                elif G.out_degree(n_id) == 0:
-                    effective_layer = max_known_layer + 1 if max_known_layer else None
-                else:
-                    effective_layer = None
-                data = dict(data)
-                data["layer"] = effective_layer
-            else:
-                data = dict(data)
-
+            # An unresolved layer stays unresolved: it is never promoted to a
+            # numeric layer so the UI cannot present it as an NCRP layer.
             data["is_final"] = is_cash_out_type
             data["is_leaf"] = G.out_degree(n_id) == 0
             nodes_payload.append({"id": n_id, "type": data.get("account_type"), "data": data})
@@ -134,25 +142,28 @@ class GraphBuilder:
                     "utr_rrn": data.get("utr_rrn"),
                     "transaction_type": data.get("transaction_type"),
                     "source_page": data.get("source_page"),
+                    "source_sheet": data.get("source_sheet"),
                     "transaction_count": data.get("transaction_count", 1),
                     "total_amount": data.get("amount"),
                     "transactions": data.get("transactions", []),
+                    "layers": data.get("layers", []),
                     "layerFrom": src_layer,
                     "layerTo": dst_layer,
                 }
             )
 
-        validation = self.validate_graph(nodes_payload, edges_payload, accounts)
+        validation = self.validate_graph(nodes_payload, edges_payload, accounts, transactions)
         payload = {
             "nodes": nodes_payload,
             "edges": edges_payload,
             "node_count": len(nodes_payload),
             "edge_count": len(edges_payload),
+            "document_layers": document_layers,
             "validation": validation,
         }
-        if validation["warnings"] and settings.is_development:
-            for warning in validation["warnings"]:
-                logger.warning("Money-trail graph validation: %s", warning)
+        if validation["issues"] and settings.is_development:
+            for issue in validation["issues"]:
+                logger.warning("Money-trail data check: %s", issue)
         return payload
 
     def validate_graph(
@@ -160,47 +171,77 @@ class GraphBuilder:
         nodes_payload: list[dict[str, Any]],
         edges_payload: list[dict[str, Any]],
         accounts: list[dict[str, Any]],
+        transactions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        warnings: list[str] = []
+        """Report genuine source-data integrity issues.
+
+        A documented layer relationship that is not sequentially increasing
+        (for example Layer 7 -> Layer 6) is valid NCRP data and is never
+        reported here.
+        """
+        transactions = transactions or []
+        issues: list[str] = []
+        notes: list[str] = []
         node_ids = {node["id"] for node in nodes_payload}
-        layers_by_id = {node["id"]: (node.get("data") or {}).get("layer") for node in nodes_payload}
-        accounts_by_id = {acc["id"]: acc for acc in accounts}
 
         seen_identity: dict[str, str] = {}
+        unresolved_nodes = 0
+        multi_layer_accounts = 0
         for node in nodes_payload:
             data = node.get("data") or {}
-            if data.get("layer") is None and str(data.get("account_type") or "").upper() not in CASHOUT_TYPES:
-                warnings.append(f"Node {data.get('account_number')} ({data.get('bank_name')}) has no layer.")
-            identity = f"{data.get('account_number')}|{str(data.get('bank_name') or '').strip().lower()}"
-            previous = seen_identity.get(identity)
-            if previous:
-                warnings.append(f"Duplicate account node for {identity}")
-            seen_identity[identity] = node["id"]
-
-            explicit = (accounts_by_id.get(node["id"]) or {}).get("raw_layer_from_doc")
-            if explicit is not None and data.get("layer") != explicit:
-                warnings.append(
-                    f"Document layer {explicit} was not preserved for {data.get('bank_name')} {data.get('account_number')} (got {data.get('layer')})."
+            account_type = str(data.get("account_type") or "").upper()
+            documented = data.get("document_layers") or []
+            if len(documented) > 1:
+                multi_layer_accounts += 1
+                notes.append(
+                    f"Account {data.get('account_number')} appears in documented layers "
+                    f"{', '.join(str(value) for value in documented)}"
                 )
+            if data.get("layer") is None and account_type not in CASHOUT_TYPES:
+                unresolved_nodes += 1
+            identity = f"{data.get('account_number')}|{str(data.get('bank_name') or '').strip().lower()}"
+            if identity in seen_identity:
+                issues.append(f"Duplicate account node for {data.get('account_number')} ({data.get('bank_name')})")
+            seen_identity[identity] = node["id"]
 
         for edge in edges_payload:
             if edge["source"] not in node_ids or edge["target"] not in node_ids:
-                warnings.append(f"Edge {edge.get('id')} references a missing node.")
+                issues.append(f"Edge {edge.get('id')} references a missing node.")
                 continue
-            src_layer = layers_by_id.get(edge["source"])
-            dst_layer = layers_by_id.get(edge["target"])
-            if src_layer is not None and dst_layer is not None and dst_layer < src_layer:
-                src = accounts_by_id.get(edge["source"], {})
-                dst = accounts_by_id.get(edge["target"], {})
-                warnings.append(
-                    f"Edge goes backwards in layers: {src.get('bank_name')} L{src_layer} → {dst.get('bank_name')} L{dst_layer}"
-                )
+            if not edge.get("transaction_count"):
+                issues.append(f"Edge {edge.get('id')} has no underlying transaction.")
 
-        victim_nodes = [node for node in nodes_payload if (node.get("data") or {}).get("layer") == 0]
-        if not victim_nodes:
-            warnings.append("No victim (layer 0) node is present.")
+        missing_layer_transactions = sum(
+            1 for tx in transactions if tx.get("transaction_type") == "ACCOUNT_TRANSFER" and tx.get("layer") is None
+        )
+        malformed = sum(
+            1
+            for tx in transactions
+            if tx.get("transaction_type") == "ACCOUNT_TRANSFER"
+            and (
+                not tx.get("from_account_id")
+                or not tx.get("to_account_id")
+                or not float(tx.get("amount") or 0)
+            )
+        )
+        if missing_layer_transactions:
+            notes.append(f"{missing_layer_transactions} transfer transactions carry no Layer value in the source")
+        if malformed:
+            issues.append(f"{malformed} transfer transactions have a missing account or non-positive amount.")
 
-        return {"ok": len(warnings) == 0, "warnings": warnings}
+        return {
+            "ok": len(issues) == 0,
+            "issues": issues,
+            "notes": notes,
+            "data_quality": {
+                "graph_nodes": len(nodes_payload),
+                "graph_edges": len(edges_payload),
+                "unresolved_layer_accounts": unresolved_nodes,
+                "multi_layer_accounts": multi_layer_accounts,
+                "transfer_transactions_without_layer": missing_layer_transactions,
+                "malformed_transactions": malformed,
+            },
+        }
 
 
 graph_builder = GraphBuilder()

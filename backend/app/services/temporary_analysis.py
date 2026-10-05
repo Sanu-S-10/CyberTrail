@@ -15,7 +15,6 @@ from app.parsers.extraction_orchestrator import extraction_orchestrator
 from app.parsers.transaction_parser import transaction_parser
 from app.services.graph_builder import graph_builder
 from app.services.layer_analyzer import layer_analyzer
-from app.services.trail_assembly import assemble_trail
 
 RESULT_TTL_SECONDS = 30 * 60
 _results: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -26,6 +25,19 @@ def _cleanup() -> None:
     expired = [key for key, (expires, _) in _results.items() if expires <= now]
     for key in expired:
         _results.pop(key, None)
+
+
+def _reported_fraud_amount(text: str) -> float | None:
+    """Dynamically find the complainant-reported total fraud amount in source text."""
+    if not text:
+        return None
+    match = re.search(r"(?:total\s+)?fraud(?:ulent)?\s*amount[^0-9]{0,60}?([0-9][0-9,]*(?:\.\d+)?)", text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", ""))
+    except (ValueError, IndexError):
+        return None
 
 
 def _extract_victim_metadata(tables: list[dict[str, Any]]) -> tuple[str, str, float]:
@@ -55,6 +67,9 @@ def _build_analysis(raw: dict[str, Any], metadata: dict[str, Any]) -> dict[str, 
     victim_bank = metadata.get("victim_bank", "") or pdf_victim_bank or "Unknown bank"
     extracted_total = float(metadata.get("total_fraud_amount") or pdf_total_amount)
     total_fraud_amount = extracted_total if extracted_total > 0 else None
+    disputed_sum = sum(float(tx.get("disputed_amount") or 0.0) for tx in raw_parsed)
+    pages_text = "\n".join(str(p.get("raw_text", "")) for p in raw.get("page_texts", []))
+    reported_fraud = _reported_fraud_amount(pages_text) or float(metadata.get("reported_fraud_amount") or 0.0) or None
 
     # Separate transfers from withdrawal records
     parsed_transfers = []
@@ -111,6 +126,7 @@ def _build_analysis(raw: dict[str, Any], metadata: dict[str, Any]) -> dict[str, 
     accounts = list(accounts_by_number.values())
     parsed_transfers = data_validator.validate_transactions(parsed_transfers)
     accounts = layer_analyzer.analyze_layers(accounts, parsed_transfers, victim_account)
+    transfer_account_count = len(accounts)
     account_layers = {account["id"]: account.get("layer") for account in accounts}
     for tx in parsed_transfers:
         doc_l = tx.get("raw_layer_from_doc")
@@ -194,18 +210,22 @@ def _build_analysis(raw: dict[str, Any], metadata: dict[str, Any]) -> dict[str, 
             "victim_name": metadata.get("victim_name", ""),
             "victim_account": victim_account,
             "victim_bank": victim_bank,
-            "total_fraud_amount": total_fraud_amount,
+            "total_fraud_amount": reported_fraud if reported_fraud else total_fraud_amount,
+            "reported_fraud_amount": reported_fraud,
+            "total_disputed_amount": round(disputed_sum, 2),
             "file_name": metadata["file_name"],
             "document_type": "PDF",
             "demo_data": False,
-            "total_accounts": len(accounts),
+            "total_accounts": transfer_account_count,
+            "total_transfer_accounts": transfer_account_count,
+            "withdrawal_event_count": len(associated_withdrawals),
             "total_transactions": len(parsed_transfers),
         },
         "accounts": accounts,
         "transactions": parsed_transfers,
         "withdrawals": associated_withdrawals,
         "graph": graph,
-        "layers": sorted({a.get("layer") for a in accounts if a.get("layer") is not None}),
+        "layers": graph.get("document_layers") or [],
         "pages": raw["metadata"],
         "sections": raw["sections"],
         "demo_data": False,
@@ -290,6 +310,7 @@ def analyze_excel(excel_bytes: bytes, metadata: dict[str, Any]) -> dict[str, Any
     accounts = list(accounts_by_number.values())
     valid_transfers = data_validator.validate_transactions(valid_transfers)
     accounts = layer_analyzer.analyze_layers(accounts, valid_transfers, victim_account)
+    transfer_account_count = len(accounts)
     account_layers = {account["id"]: account.get("layer") for account in accounts}
     for tx in valid_transfers:
         doc_l = tx.get("raw_layer_from_doc")
@@ -299,7 +320,7 @@ def analyze_excel(excel_bytes: bytes, metadata: dict[str, Any]) -> dict[str, Any
         else:
             inferred_l = account_layers.get(tx.get("to_account_id"))
             tx["layer"] = inferred_l
-            tx["layer_source"] = "inferred" if inferred_l is not None else "unknown"
+            tx["layer_source"] = "inferred" if inferred_l is not None else "unresolved"
 
     # Associate withdrawal events with matching accounts, and expose each
     # cash-out event as a connected account node so SHOW ALL can display it.
@@ -368,13 +389,11 @@ def analyze_excel(excel_bytes: bytes, metadata: dict[str, Any]) -> dict[str, Any
 
     graph = graph_builder.build_networkx_graph(accounts, valid_transfers + cashout_txs)
 
-    total_fraud = metadata.get("total_fraud_amount")
-    if not total_fraud and valid_transfers:
-        disputed_total = sum(float(tx.get("disputed_amount") or 0.0) for tx in valid_transfers)
-        if disputed_total > 0:
-            total_fraud = disputed_total
-        else:
-            total_fraud = sum(float(tx.get("amount", 0.0)) for tx in valid_transfers if tx.get("layer") == 1 or tx.get("from_account_number") == victim_account)
+    disputed_total = sum(float(tx.get("disputed_amount") or 0.0) for tx in valid_transfers)
+    reported_fraud = float(raw.get("metadata", {}).get("reported_fraud_amount") or 0.0) or None
+    # total_fraud_amount keeps its meaning: an amount explicitly stated by the
+    # source (or supplied by the investigator). It is never the disputed total.
+    total_fraud = metadata.get("total_fraud_amount") or reported_fraud
 
     result = {
         "analysis_id": analysis_id,
@@ -386,17 +405,22 @@ def analyze_excel(excel_bytes: bytes, metadata: dict[str, Any]) -> dict[str, Any
             "victim_account": victim_account,
             "victim_bank": victim_bank,
             "total_fraud_amount": total_fraud,
+            "reported_fraud_amount": reported_fraud,
+            "total_disputed_amount": round(disputed_total, 2),
             "file_name": metadata["file_name"],
             "document_type": "EXCEL",
             "demo_data": False,
-            "total_accounts": len(accounts),
+            "total_accounts": transfer_account_count if transfer_account_count else len(accounts),
+            "total_transfer_accounts": transfer_account_count,
+            "withdrawal_event_count": len(associated_withdrawals),
             "total_transactions": len(valid_transfers),
         },
         "accounts": accounts,
         "transactions": valid_transfers,
         "withdrawals": associated_withdrawals,
+        "other_records": raw.get("other_records", []),
         "graph": graph,
-        "layers": sorted({a.get("layer") for a in accounts if a.get("layer") is not None}),
+        "layers": graph.get("document_layers") or [],
         "pages": raw["metadata"],
         "sections": raw["sections"],
         "demo_data": False,

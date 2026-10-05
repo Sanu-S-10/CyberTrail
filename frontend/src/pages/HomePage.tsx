@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { useAnalysis } from '@/contexts/AnalysisContext'
 import { useTheme } from '@/contexts/ThemeContext'
+import { buildDemoAnalysis } from '@/demo/demoTrailData'
 import symbolLogo from '@/logo/symbol.png'
 import { cn } from '@/lib/utils'
 
@@ -49,14 +50,18 @@ export function HomePage() {
     if (!selectedFile) return
 
     const fn = selectedFile.name.toLowerCase()
-    const isValidType = selectedFile.type === 'application/pdf' || fn.endsWith('.pdf') || fn.endsWith('.xlsx') || fn.endsWith('.xls')
+    const isValidType = fn.endsWith('.pdf') || fn.endsWith('.xlsx')
     if (!isValidType) {
-      setError('Invalid file type. Please select an official PDF or Excel (.xlsx, .xls) document.')
+      if (fn.endsWith('.xls')) {
+        setError('Legacy .xls workbooks are not supported. Please re-save the file as .xlsx and upload again.')
+      } else {
+        setError('Invalid file type. Please select an official NCRP PDF or Excel (.xlsx) document.')
+      }
       return
     }
 
     if (selectedFile.size > 50 * 1024 * 1024) {
-      setError('File size exceeds 50 MB limit. Please select a smaller PDF file.')
+      setError('File size exceeds the 50 MB limit. Please select a smaller document.')
       return
     }
 
@@ -94,23 +99,7 @@ export function HomePage() {
   }
 
   function handleLoadDemo() {
-    setAnalysis({
-      analysis_id: 'demo-sample-case',
-      expires_in_seconds: 3600,
-      demo_data: true,
-      case: {
-        total_fraud_amount: 2450000,
-        total_accounts: 18,
-        total_transactions: 27,
-        maximum_layer: 4,
-      },
-      accounts: [],
-      transactions: [],
-      graph: { nodes: [], edges: [] },
-      layers: [0, 1, 2, 3, 4],
-      pages: {},
-      sections: [],
-    })
+    setAnalysis(buildDemoAnalysis() as any)
     navigate('/money-trail')
   }
 
@@ -127,7 +116,7 @@ export function HomePage() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,application/vnd.ms-excel,.xls"
+        accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx"
         className="hidden"
         onChange={handleFileSelected}
       />
@@ -521,7 +510,7 @@ export function HomePage() {
               </div>
               <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">Upload Document</h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
-                Click Upload Document to choose any official NCRP cyber fraud complaint PDF or Excel workbook (.xlsx/.xls) directly from your file manager.
+                Click Upload Document to choose any official NCRP cyber fraud complaint PDF or Excel workbook (.pdf / .xlsx) directly from your file manager.
               </p>
             </div>
 

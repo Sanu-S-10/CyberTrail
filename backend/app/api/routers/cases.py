@@ -22,11 +22,14 @@ async def analyze_case(
     victim_bank: Optional[str] = Form(None),
     total_fraud_amount: float = Form(0.0),
 ):
-    """Process one PDF or Excel document without authentication or permanent storage."""
+    """Process one PDF or Excel (.xlsx) document without authentication or permanent storage."""
     filename = file.filename or "analysis.pdf"
     lower_fn = filename.lower()
-    if not (lower_fn.endswith(".pdf") or lower_fn.endswith(".xlsx") or lower_fn.endswith(".xls")):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF and Excel documents (.pdf, .xlsx, .xls) are supported.")
+    if not (lower_fn.endswith(".pdf") or lower_fn.endswith(".xlsx")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Supported documents are .pdf and .xlsx (Excel). Legacy .xls files are not supported \u2014 please re-save as .xlsx.",
+        )
     content = await file.read()
     if len(content) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document exceeds the 50 MB limit.")
@@ -41,7 +44,7 @@ async def analyze_case(
         "total_fraud_amount": total_fraud_amount,
     }
 
-    if lower_fn.endswith(".xlsx") or lower_fn.endswith(".xls"):
+    if lower_fn.endswith(".xlsx"):
         return analyze_excel(content, meta)
 
     if not content.startswith(b"%PDF-"):

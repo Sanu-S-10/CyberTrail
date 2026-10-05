@@ -6,7 +6,7 @@ applying 11-column header mapping for layer transfers and specialized POS/ATM/Ca
 
 import io
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import pdfplumber
 
 logger = logging.getLogger(__name__)

@@ -25,7 +25,7 @@ export function UploadPage() {
       if (rej.file.size > MAX_FILE_SIZE_BYTES) {
         setError('File size exceeds the 50 MB limit. Please upload a smaller document.')
       } else {
-        setError('Invalid file type. Only PDF (.pdf) and Excel (.xlsx, .xls) documents are supported.')
+        setError('Invalid file type. Supported documents are PDF (.pdf) and Excel (.xlsx).')
       }
       return
     }
@@ -33,8 +33,10 @@ export function UploadPage() {
     if (acceptedFiles.length > 0) {
       const selected = acceptedFiles[0]
       const fn = selected.name.toLowerCase()
-      if (!fn.endsWith('.pdf') && !fn.endsWith('.xlsx') && !fn.endsWith('.xls')) {
-        setError('Only PDF and Excel files (.pdf, .xlsx, .xls) are permitted.')
+      if (!fn.endsWith('.pdf') && !fn.endsWith('.xlsx')) {
+        setError(fn.endsWith('.xls')
+          ? 'Legacy .xls workbooks are not supported. Please re-save the file as .xlsx.'
+          : 'Only PDF and Excel files (.pdf, .xlsx) are permitted.')
         return
       }
       setFile(selected)
@@ -48,7 +50,6 @@ export function UploadPage() {
     accept: {
       'application/pdf': ['.pdf'],
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.ms-excel': ['.xls'],
     },
     maxFiles: 1,
     maxSize: MAX_FILE_SIZE_BYTES,
@@ -161,7 +162,7 @@ export function UploadPage() {
                 <p className="text-base font-semibold text-slate-800">
                   {isDragActive ? 'Drop the file here…' : 'Drag & drop your PDF or Excel file here, or click to browse'}
                 </p>
-                <p className="text-sm text-slate-500 mt-1">Supports official NCRP Complaint PDFs &amp; Excel Workbooks (.pdf, .xlsx, .xls) (max 50 MB)</p>
+                <p className="text-sm text-slate-500 mt-1">Supports official NCRP Complaint PDFs &amp; Excel Workbooks (.pdf, .xlsx) (max 50 MB)</p>
               </div>
             </div>
           )}

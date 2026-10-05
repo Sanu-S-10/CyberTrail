@@ -85,7 +85,11 @@ export function EvidencePage() {
                 <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-xs font-extrabold text-slate-900 dark:text-slate-100">{sec.section_name || sec.title || `Section ${idx + 1}`}</p>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Page {sec.page_number || sec.page || '1'}</p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {sec.sheet_name
+                      ? `Source Sheet: ${sec.sheet_name}`
+                      : `Source Page ${sec.page_number || sec.page || '1'}`}
+                  </p>
                 </div>
               </div>
             ))}

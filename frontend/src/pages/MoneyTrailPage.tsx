@@ -22,6 +22,7 @@ import {
   ZoomOut,
   Eye,
   ShieldCheck,
+  AlertCircle,
 } from 'lucide-react'
 import {
   Background,
@@ -39,6 +40,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { toPng, toSvg } from 'html-to-image'
 import { useAnalysis } from '@/contexts/AnalysisContext'
+import { buildDemoAnalysis, DEMO_EDGES, DEMO_LABEL, DEMO_NODES } from '@/demo/demoTrailData'
 import { cn } from '@/lib/utils'
 
 // Palette for layers 1-N — each entry is unique, no repeats
@@ -76,23 +78,35 @@ const LAYER_EDGE_COLORS = [
 // Custom Node Component matching the vertical tree node design
 function MoneyTrailNode({ data, selected }: any) {
   const raw = data.raw || {}
-  const layer = Number(raw.layer ?? 0)
+  const rawLayer = raw.layer
+  const layer = Number.isFinite(Number(rawLayer)) && rawLayer !== null && rawLayer !== undefined ? Number(rawLayer) : null
   const isVictim = layer === 0
   const isFinal = Boolean(raw.isFinal || raw.isATM || raw.type === 'final' || raw.type === 'cash_out' || raw.type === 'ATM' || raw.type === 'POS' || raw.type === 'CASH')
 
   const isHighlighted = Boolean(data.isHighlighted || data.isSelected || selected)
   const isDimmed = Boolean(data.isDimmed && !isHighlighted)
+  // No official layer in the source document \u2014 shown as unresolved, never as a layer number.
+  const isUnresolved = layer === null
 
   // Pick palette entry for this layer (layers 1+ cycle through LAYER_PALETTE)
-  const paletteEntry = LAYER_PALETTE[(layer - 1) % LAYER_PALETTE.length] || LAYER_PALETTE[0]
+  const paletteEntry = LAYER_PALETTE[((layer || 1) - 1) % LAYER_PALETTE.length] || LAYER_PALETTE[0]
 
-  const theme = isVictim
+  const theme = isUnresolved
+    ? {
+        bg: 'bg-slate-50',
+        border: 'border-slate-300',
+        text: 'text-slate-500',
+        iconBg: 'bg-slate-400',
+        label: 'No NCRP layer in source (unresolved)',
+        Icon: Landmark,
+      }
+    : isVictim
     ? {
         bg: 'bg-[#FFF5F5]',
         border: 'border-[#FCA5A5]',
         text: 'text-red-600',
         iconBg: 'bg-[#EF4444]',
-        label: 'L0 • Victim Account',
+        label: 'Victim / Origin',
         Icon: UserRound,
       }
     : isFinal
@@ -102,13 +116,15 @@ function MoneyTrailNode({ data, selected }: any) {
         text: 'text-slate-600',
         iconBg: 'bg-[#475569]',
         label: raw.account === 'CASH_COUNTER' || raw.type === 'CASH'
-          ? `L${layer} • Physical Cash Withdrawal`
-          : `L${layer} • Cash-out / Final Account`,
+          ? `Cash-out • ${layer !== null ? `from Layer ${layer}` : 'unlinked layer'}`
+          : `Cash-out • ${layer !== null ? `from Layer ${layer}` : 'unlinked layer'}`,
         Icon: Landmark,
       }
     : {
         ...paletteEntry,
-        label: `L${layer} • Layer ${layer}`,
+        label: (raw.documentLayers && raw.documentLayers.length > 1)
+          ? `Layer ${layer} (also L${(raw.documentLayers as number[]).filter((value: number) => value !== layer).join(', L')})`
+          : `Layer ${layer}`,
         Icon: Landmark,
       }
 
@@ -207,78 +223,6 @@ const nodeTypes = {
   moneyNode: MoneyTrailNode,
 }
 
-// Dataset matching the vertical tree screenshot exactly
-const DEMO_NODES = [
-  // L0 - Victim
-  { id: 'v1', layer: 0, account: 'XXXX1234', bank: 'State Bank of India', totalAmountStr: '₹ 24,50,000', txnCountStr: '12 txns', amountIn: 0, amountOut: 2450000, txns: 12, ifsc: 'SBIN0001234', connectedIn: '0', connectedOut: '3 to Layer 1', pos: { x: 680, y: 0 } },
-
-  // L1 - Layer 1 (3 nodes)
-  { id: 'l1_1', layer: 1, account: 'XXXX5678', bank: 'HDFC Bank', totalAmountStr: '₹ 8,00,000', txnCountStr: '5 txns', amountIn: 800000, amountOut: 800000, txns: 5, ifsc: 'HDFC0005678', connectedIn: '1 from Victim', connectedOut: '2 to Layer 2', pos: { x: 180, y: 160 } },
-  { id: 'l1_2', layer: 1, account: 'XXXX9012', bank: 'ICICI Bank', totalAmountStr: '₹ 9,50,000', txnCountStr: '4 txns', amountIn: 950000, amountOut: 950000, txns: 4, ifsc: 'ICIC0009012', connectedIn: '1 from Victim', connectedOut: '2 to Layer 2', pos: { x: 680, y: 160 } },
-  { id: 'l1_3', layer: 1, account: 'XXXX7890', bank: 'Axis Bank', totalAmountStr: '₹ 7,00,000', txnCountStr: '3 txns', amountIn: 700000, amountOut: 700000, txns: 3, ifsc: 'UTIB0007890', connectedIn: '1 from Victim', connectedOut: '2 to Layer 2', pos: { x: 1180, y: 160 } },
-
-  // L2 - Layer 2 (6 nodes)
-  { id: 'l2_1', layer: 2, account: 'XXXX3456', bank: 'Kotak Mahindra', totalAmountStr: '₹ 4,00,000', txnCountStr: '2 txns', amountIn: 400000, amountOut: 400000, txns: 2, ifsc: 'KKBK0003456', connectedIn: '1 from Layer 1', connectedOut: '2 to Layer 3', pos: { x: 50, y: 340 } },
-  { id: 'l2_2', layer: 2, account: 'XXXX6678', bank: 'Yes Bank', totalAmountStr: '₹ 4,00,000', txnCountStr: '3 txns', amountIn: 400000, amountOut: 400000, txns: 3, ifsc: 'YESB0006678', connectedIn: '1 from Layer 1', connectedOut: '1 to Layer 3', pos: { x: 290, y: 340 } },
-  { id: 'l2_3', layer: 2, account: 'XXXX1122', bank: 'Bank of Baroda', totalAmountStr: '₹ 5,00,000', txnCountStr: '2 txns', amountIn: 500000, amountOut: 500000, txns: 2, ifsc: 'BARB0001122', connectedIn: '1 from Layer 1', connectedOut: '1 to Layer 3', pos: { x: 550, y: 340 } },
-  { id: 'l2_4', layer: 2, account: 'XXXX3344', bank: 'Canara Bank', totalAmountStr: '₹ 4,50,000', txnCountStr: '2 txns', amountIn: 450000, amountOut: 450000, txns: 2, ifsc: 'CNRB0003344', connectedIn: '1 from Layer 1', connectedOut: '2 to Layer 3', pos: { x: 790, y: 340 } },
-  { id: 'l2_5', layer: 2, account: 'XXXX9988', bank: 'IDFC First Bank', totalAmountStr: '₹ 3,00,000', txnCountStr: '1 txn', amountIn: 300000, amountOut: 300000, txns: 1, ifsc: 'IDFB0009988', connectedIn: '1 from Layer 1', connectedOut: '1 to Layer 3', pos: { x: 1050, y: 340 } },
-  { id: 'l2_6', layer: 2, account: 'XXXX7766', bank: 'Union Bank', totalAmountStr: '₹ 4,00,000', txnCountStr: '2 txns', amountIn: 400000, amountOut: 400000, txns: 2, ifsc: 'UBIN0007766', connectedIn: '1 from Layer 1', connectedOut: '1 to Layer 3', pos: { x: 1290, y: 340 } },
-
-  // L3 - Layer 3 (8 nodes)
-  { id: 'l3_1', layer: 3, account: 'XXXX5566', bank: 'Paytm Payments', totalAmountStr: '₹ 2,00,000', txnCountStr: '1 txn', amountIn: 200000, amountOut: 200000, txns: 1, ifsc: 'PYTM0005566', connectedIn: '1 from Layer 2', connectedOut: '1 to Final Account', pos: { x: 0, y: 520 } },
-  { id: 'l3_2', layer: 3, account: 'XXXX7788', bank: 'PhonePe', totalAmountStr: '₹ 2,00,000', txnCountStr: '1 txn', amountIn: 200000, amountOut: 200000, txns: 1, ifsc: 'YBL0007788', connectedIn: '1 from Layer 2', connectedOut: '1 to Final Account', pos: { x: 150, y: 520 } },
-  { id: 'l3_3', layer: 3, account: 'XXXX9900', bank: 'Razorpay', totalAmountStr: '₹ 4,00,000', txnCountStr: '3 txns', amountIn: 400000, amountOut: 0, txns: 3, ifsc: 'RAZR0009900', connectedIn: '1 from Layer 2', connectedOut: '0', pos: { x: 320, y: 520 } },
-  { id: 'l3_4', layer: 3, account: 'XXXX2211', bank: 'IndusInd Bank', totalAmountStr: '₹ 2,00,000', txnCountStr: '1 txn', amountIn: 200000, amountOut: 200000, txns: 1, ifsc: 'INDB0002211', connectedIn: '1 from Layer 2', connectedOut: '1 to Final Account', pos: { x: 500, y: 520 } },
-  { id: 'l3_5', layer: 3, account: 'XXXX4433', bank: 'Federal Bank', totalAmountStr: '₹ 2,50,000', txnCountStr: '2 txns', amountIn: 250000, amountOut: 250000, txns: 2, ifsc: 'FDRL0004433', connectedIn: '1 from Layer 2', connectedOut: '1 to Final Account', pos: { x: 660, y: 520 } },
-  { id: 'l3_6', layer: 3, account: 'XXXX6655', bank: 'AU Small Finance', totalAmountStr: '₹ 4,50,000', txnCountStr: '2 txns', amountIn: 450000, amountOut: 0, txns: 2, ifsc: 'AUBL0006655', connectedIn: '1 from Layer 2', connectedOut: '0', pos: { x: 820, y: 520 } },
-  { id: 'l3_7', layer: 3, account: 'XXXX8877', bank: 'Jupiter', totalAmountStr: '₹ 3,00,000', txnCountStr: '1 txn', amountIn: 300000, amountOut: 300000, txns: 1, ifsc: 'JUPT0008877', connectedIn: '1 from Layer 2', connectedOut: '1 to Final Account', pos: { x: 1020, y: 520 } },
-  { id: 'l3_8', layer: 3, account: 'XXXX9999', bank: 'Navi', totalAmountStr: '₹ 4,00,000', txnCountStr: '2 txns', amountIn: 400000, amountOut: 400000, txns: 2, ifsc: 'NAVI0009999', connectedIn: '1 from Layer 2', connectedOut: '1 to Final Account', pos: { x: 1220, y: 520 } },
-
-  // L4 - Final Accounts (3 nodes)
-  { id: 'f1', layer: 4, account: 'XXXX1010', bank: 'Unknown Bank', totalAmountStr: '₹ 2,00,000', txnCountStr: '1 txn', isFinal: true, amountIn: 200000, amountOut: 0, txns: 1, ifsc: 'UNKN0001010', connectedIn: '2 from Layer 3', connectedOut: '0', pos: { x: 75, y: 700 } },
-  { id: 'f2', layer: 4, account: 'XXXX2020', bank: 'Unknown Bank', totalAmountStr: '₹ 2,50,000', txnCountStr: '1 txn', isFinal: true, amountIn: 250000, amountOut: 0, txns: 1, ifsc: 'UNKN0002020', connectedIn: '2 from Layer 3', connectedOut: '0', pos: { x: 580, y: 700 } },
-  { id: 'f3', layer: 4, account: 'XXXX3030', bank: 'Unknown Bank', totalAmountStr: '₹ 4,00,000', txnCountStr: '1 txn', isFinal: true, amountIn: 400000, amountOut: 0, txns: 1, ifsc: 'UNKN0003030', connectedIn: '2 from Layer 3', connectedOut: '0', pos: { x: 1120, y: 700 } },
-]
-
-const DEMO_EDGES = [
-  // L0 -> L1
-  { id: 'e_v1_l1_1', source: 'v1', target: 'l1_1', amount: '₹ 8,00,000', txnsText: '(5 txns)', color: '#10B981', amountValue: 800000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR8000000001', date: '12 Jan 2024 10:24', bankPair: 'SBI → HDFC' },
-  { id: 'e_v1_l1_2', source: 'v1', target: 'l1_2', amount: '₹ 9,50,000', txnsText: '(4 txns)', color: '#10B981', amountValue: 950000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR9500000002', date: '12 Jan 2024 10:45', bankPair: 'SBI → ICICI' },
-  { id: 'e_v1_l1_3', source: 'v1', target: 'l1_3', amount: '₹ 7,00,000', txnsText: '(3 txns)', color: '#10B981', amountValue: 700000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR7000000003', date: '12 Jan 2024 11:00', bankPair: 'SBI → Axis' },
-
-  // L1 -> L2
-  { id: 'e_l1_1_l2_1', source: 'l1_1', target: 'l2_1', amount: '₹ 4,00,000', txnsText: '(2 txns)', color: '#3B82F6', amountValue: 400000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4000000004', date: '12 Jan 2024 11:30', bankPair: 'HDFC → Kotak' },
-  { id: 'e_l1_1_l2_2', source: 'l1_1', target: 'l2_2', amount: '₹ 4,00,000', txnsText: '(3 txns)', color: '#3B82F6', amountValue: 400000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4000000005', date: '12 Jan 2024 11:45', bankPair: 'HDFC → Yes Bank' },
-  { id: 'e_l1_2_l2_3', source: 'l1_2', target: 'l2_3', amount: '₹ 5,00,000', txnsText: '(2 txns)', color: '#3B82F6', amountValue: 500000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR5000000006', date: '12 Jan 2024 12:15', bankPair: 'ICICI → BOB' },
-  { id: 'e_l1_2_l2_4', source: 'l1_2', target: 'l2_4', amount: '₹ 4,50,000', txnsText: '(2 txns)', color: '#3B82F6', amountValue: 450000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4500000007', date: '12 Jan 2024 12:30', bankPair: 'ICICI → Canara' },
-  { id: 'e_l1_3_l2_5', source: 'l1_3', target: 'l2_5', amount: '₹ 3,00,000', txnsText: '(1 txn)', color: '#3B82F6', amountValue: 300000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR3000000008', date: '12 Jan 2024 13:00', bankPair: 'Axis → IDFC' },
-  { id: 'e_l1_3_l2_6', source: 'l1_3', target: 'l2_6', amount: '₹ 4,00,000', txnsText: '(2 txns)', color: '#3B82F6', amountValue: 400000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4000000009', date: '12 Jan 2024 13:15', bankPair: 'Axis → Union' },
-
-  // L2 -> L3
-  { id: 'e_l2_1_l3_1', source: 'l2_1', target: 'l3_1', amount: '₹ 2,00,000', txnsText: '(1 txn)', color: '#F59E0B', amountValue: 200000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR2000000010', date: '12 Jan 2024 14:00', bankPair: 'Kotak → Paytm' },
-  { id: 'e_l2_1_l3_2', source: 'l2_1', target: 'l3_2', amount: '₹ 2,00,000', txnsText: '(1 txn)', color: '#F59E0B', amountValue: 200000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR2000000011', date: '12 Jan 2024 14:15', bankPair: 'Kotak → PhonePe' },
-  { id: 'e_l2_2_l3_3', source: 'l2_2', target: 'l3_3', amount: '₹ 4,00,000', txnsText: '(3 txns)', color: '#F59E0B', amountValue: 400000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4000000012', date: '12 Jan 2024 14:30', bankPair: 'Yes → Razorpay' },
-  { id: 'e_l2_3_l3_4', source: 'l2_3', target: 'l3_4', amount: '₹ 2,00,000', txnsText: '(1 txn)', color: '#F59E0B', amountValue: 200000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR2000000013', date: '12 Jan 2024 15:00', bankPair: 'BOB → IndusInd' },
-  { id: 'e_l2_4_l3_5', source: 'l2_4', target: 'l3_5', amount: '₹ 2,50,000', txnsText: '(2 txns)', color: '#F59E0B', amountValue: 250000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR2500000014', date: '12 Jan 2024 15:15', bankPair: 'Canara → Federal' },
-  { id: 'e_l2_4_l3_6', source: 'l2_4', target: 'l3_6', amount: '₹ 4,50,000', txnsText: '(2 txns)', color: '#F59E0B', amountValue: 450000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4500000015', date: '12 Jan 2024 15:30', bankPair: 'Canara → AU Small' },
-  { id: 'e_l2_5_l3_7', source: 'l2_5', target: 'l3_7', amount: '₹ 3,00,000', txnsText: '(1 txn)', color: '#F59E0B', amountValue: 300000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR3000000016', date: '12 Jan 2024 16:00', bankPair: 'IDFC → Jupiter' },
-  { id: 'e_l2_6_l3_8', source: 'l2_6', target: 'l3_8', amount: '₹ 4,00,000', txnsText: '(2 txns)', color: '#F59E0B', amountValue: 400000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4000000017', date: '12 Jan 2024 16:15', bankPair: 'Union → Navi' },
-
-  // L3 -> L4 (Final)
-  { id: 'e_l3_1_f1', source: 'l3_1', target: 'f1', amount: '₹ 2,00,000', txnsText: '(1 txn)', color: '#64748B', amountValue: 200000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR2000000018', date: '13 Jan 2024 10:00', bankPair: 'Paytm → Unknown' },
-  { id: 'e_l3_4_f2', source: 'l3_4', target: 'f2', amount: '₹ 2,50,000', txnsText: '(1 txn)', color: '#64748B', amountValue: 250000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR2500000019', date: '13 Jan 2024 10:30', bankPair: 'IndusInd → Unknown' },
-  { id: 'e_l3_8_f3', source: 'l3_8', target: 'f3', amount: '₹ 4,00,000', txnsText: '(1 txn)', color: '#64748B', amountValue: 400000, mode: 'ACCOUNT_TRANSFER', utr: 'UTR4000000020', date: '13 Jan 2024 11:00', bankPair: 'Navi → Unknown' },
-]
-
-const layerLegend = [
-  { label: 'Victim Account', color: '#EF4444' },
-  { label: 'Layer 1', color: '#10B981' },
-  { label: 'Layer 2', color: '#3B82F6' },
-  { label: 'Layer 3', color: '#F59E0B' },
-  { label: 'Final Account', color: '#64748B' },
-]
-
 export function MoneyTrailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -316,8 +260,12 @@ export function MoneyTrailPage() {
   }, [analysis])
 
   const graphData = useMemo(() => {
+    // Demo trail is only rendered when the loaded analysis is explicitly demo data.
+    if (analysis?.demo_data === true) {
+      return { nodes: DEMO_NODES as any[], edges: DEMO_EDGES as any[] }
+    }
     if (!analysis || !analysis.graph?.nodes?.length) {
-      return { nodes: DEMO_NODES, edges: DEMO_EDGES }
+      return { nodes: [] as any[], edges: [] as any[] }
     }
 
     const apiNodes: any[] = analysis.graph.nodes
@@ -348,13 +296,11 @@ export function MoneyTrailPage() {
     const nodes = apiNodes.map((node: any) => {
       const data = node.data || {}
       const rawLayer = data.layer
-      let layer: number
-      if (rawLayer !== null && rawLayer !== undefined && Number.isFinite(Number(rawLayer))) {
-        layer = Number(rawLayer)
-      } else {
-        // Sink nodes (no outgoing) and unknown-layer nodes go to the final bucket
-        layer = 999
-      }
+      // An unresolved layer stays null; it is never promoted to a number.
+      const layer: number | null =
+        rawLayer !== null && rawLayer !== undefined && Number.isFinite(Number(rawLayer))
+          ? Number(rawLayer)
+          : null
 
       const accountType = String(data.account_type || '').toUpperCase()
       const isATM = accountType === 'ATM' || accountType === 'POS' || accountType === 'CASH'
@@ -368,12 +314,14 @@ export function MoneyTrailPage() {
       return {
         id: node.id,
         layer,
+        documentLayers: (data.document_layers || []).map((value: any) => Number(value)),
+        layerSource: data.layer_source || null,
         account: data.account_number || node.id,
         bank: data.bank_name || 'Unknown Bank',
         ifsc: data.ifsc || 'Not available',
         totalAmountStr: `\u20B9 ${Number(data.total_outgoing || data.total_incoming || 0).toLocaleString('en-IN')}`,
         txnCountStr: (() => {
-          // Victim (L0): show how many outgoing transfers it made
+          // Victim / origin: show how many outgoing transfers it made
           // All other accounts: show incoming transfers received (= "Layer N entries" count)
           const isVictimNode = layer === 0
           const count = isVictimNode
@@ -386,8 +334,12 @@ export function MoneyTrailPage() {
         isFinal,
         isATM,
         type: accountType,
-        connectedIn: `${inDegree.get(node.id) || 0} from Layer ${Math.max(0, layer - 1)}`,
-        connectedOut: `${outDegree.get(node.id) || 0} to Layer ${layer + 1}`,
+        connectedIn: layer === null
+          ? `${inDegree.get(node.id) || 0} incoming`
+          : `${inDegree.get(node.id) || 0} from Layer ${Math.max(0, layer - 1)}`,
+        connectedOut: layer === null
+          ? `${outDegree.get(node.id) || 0} outgoing`
+          : `${outDegree.get(node.id) || 0} to Layer ${layer + 1}`,
         withdrawals,
         withdrawalCount,
         totalWithdrawalAmount,
@@ -396,33 +348,21 @@ export function MoneyTrailPage() {
       }
     })
 
-    // Group by layer for layout
-    const layerGroups = new Map<number, any[]>()
+    // Group by layer for layout. `null` = no layer in the source document; those
+    // nodes are laid out in a separate trailing row and never become a layer.
+    const layerGroups = new Map<string, any[]>()
     nodes.forEach((n) => {
-      const g = layerGroups.get(n.layer) || []
+      const key = n.layer === null ? 'unresolved' : String(n.layer)
+      const g = layerGroups.get(key) || []
       g.push(n)
-      layerGroups.set(n.layer, g)
+      layerGroups.set(key, g)
     })
 
-    // Find the actual maximum real layer (excluding the 999 sentinel for unknowns)
-    const realMaxLayer = Math.max(...nodes.filter((n) => n.layer !== 999).map((n) => n.layer), 0)
-    const finalLayer = realMaxLayer + 1
-
-    // Replace sentinel 999 with the actual final layer number
-    nodes.forEach((n) => {
-      if (n.layer === 999) {
-        n.layer = finalLayer
-        n.connectedIn = `${inDegree.get(n.id) || 0} from Layer ${realMaxLayer}`
-        n.connectedOut = `0`
-        // Re-bucket into correct group
-        layerGroups.delete(999)
-        const fg = layerGroups.get(finalLayer) || []
-        fg.push(n)
-        layerGroups.set(finalLayer, fg)
-      }
+    const sortedLayers = [...layerGroups.keys()].sort((a, b) => {
+      if (a === 'unresolved') return 1
+      if (b === 'unresolved') return -1
+      return Number(a) - Number(b)
     })
-
-    const sortedLayers = [...layerGroups.keys()].sort((a, b) => a - b)
     const NODE_W = 220
     const HORIZ_GAP = 40
     const VERT_GAP = 185
@@ -443,9 +383,9 @@ export function MoneyTrailPage() {
     const edges = apiEdges.map((edge: any, index: number) => {
       const src = nodeById.get(edge.source)
       const tgt = nodeById.get(edge.target)
-      const srcLayer = src?.layer ?? 0
-      // srcLayer 0 = victim (use first palette color), srcLayer 1+ index into LAYER_EDGE_COLORS
-      const color = srcLayer === 0
+      const srcLayer = src?.layer ?? null
+      // Victim/origin edges use the first palette colour, layer N+ edges follow LAYER_EDGE_COLORS
+      const color = srcLayer === null || srcLayer === 0
         ? LAYER_EDGE_COLORS[0]
         : LAYER_EDGE_COLORS[(srcLayer - 1) % LAYER_EDGE_COLORS.length]
 
@@ -462,10 +402,22 @@ export function MoneyTrailPage() {
         color,
         amountValue: Number(edge.amount || 0),
         amount: `\u20B9 ${Number(edge.amount || 0).toLocaleString('en-IN')}`,
-        txnsText: '(1 txn)',
+        txnsText: (() => {
+          const count = Number(edge.transaction_count || edge.transactions?.length || 1)
+          return `(${count} txn${count !== 1 ? 's' : ''})`
+        })(),
+        transactionCount: Number(edge.transaction_count || edge.transactions?.length || 1),
+        underlyingTransactions: edge.transactions || [],
         mode: edge.transaction_type || 'ACCOUNT_TRANSFER',
         utr,
         date,
+        sourceSheet: edge.source_sheet || null,
+        sourcePage: edge.source_page || null,
+        sourceLabel: edge.source_sheet
+          ? `Source Sheet: ${edge.source_sheet}`
+          : edge.source_page
+          ? `Source Page ${edge.source_page}`
+          : 'Source not available',
         bankPair: `${srcBank} \u2192 ${tgtBank}`,
       }
     })
@@ -473,15 +425,24 @@ export function MoneyTrailPage() {
     return { nodes, edges }
   }, [analysis])
 
-  // Exclude final-account sentinel layer from max layer display
-  const realNodes = graphData.nodes.filter((n) => !n.isFinal)
-  const maxLayer = realNodes.length > 0 ? Math.max(...realNodes.map((n) => n.layer), 0) : Math.max(...graphData.nodes.map((n) => n.layer), 0)
+  // Highest layer actually present in the analysed source document
+  const officialLayers = (analysis?.graph as any)?.document_layers
+  const maxLayer = useMemo(() => {
+    if (Array.isArray(officialLayers) && officialLayers.length > 0) {
+      return Math.max(...officialLayers.map((value: any) => Number(value)))
+    }
+    const numbered = graphData.nodes
+      .filter((n: any) => !n.isFinal)
+      .map((n: any) => n.layer)
+      .filter((value: any): value is number => typeof value === 'number')
+    return numbered.length ? Math.max(...numbered) : 0
+  }, [officialLayers, graphData.nodes])
   const maxVisibleLayer = revealMode ? revealLevel : null
 
   const visibleNodes = useMemo(() => {
     const byLayer = maxVisibleLayer === null
       ? graphData.nodes
-      : graphData.nodes.filter((node) => node.layer <= maxVisibleLayer)
+      : graphData.nodes.filter((node) => node.layer === null || node.layer <= maxVisibleLayer)
     // Cash-out (ATM/POS/CASH) nodes only appear in SHOW ALL mode
     return displayMode === 'LAYERS_ONLY' ? byLayer.filter((n) => !(n as any).isATM) : byLayer
   }, [graphData.nodes, maxVisibleLayer, displayMode])
@@ -552,7 +513,7 @@ export function MoneyTrailPage() {
       return {
         id: node.id,
         type: 'moneyNode',
-        position: node.pos || { x: 300, y: node.layer * 180 },
+        position: node.pos || { x: 300, y: (node.layer ?? 0) * 180 },
         data: {
           raw: node,
           isHighlighted,
@@ -694,9 +655,11 @@ export function MoneyTrailPage() {
     setEdges(initialFlowEdges)
   }, [initialFlowNodes, initialFlowEdges, setEdges, setNodes])
 
-  const totalAccountsCount = analysis?.case?.total_accounts || analysis?.accounts?.length || 18
+  const totalAccountsCount = analysis?.case?.total_transfer_accounts || analysis?.case?.total_accounts || analysis?.accounts?.filter((a: any) => a.account_type !== 'ATM' && a.account_type !== 'POS' && a.account_type !== 'CASH').length || 18
   const totalTxCount = analysis?.case?.total_transactions || analysis?.transactions?.length || 27
-  const totalAmount = Number(analysis?.case?.total_fraud_amount || 2450000)
+  const reportedFraud = analysis?.case?.reported_fraud_amount
+  const disputedTotal = Number(analysis?.case?.total_disputed_amount ?? (analysis ? 0 : 2450000))
+  const withdrawalCountTotal = analysis?.case?.withdrawal_event_count ?? (analysis?.withdrawals?.length || 0)
 
   const transactionRows = useMemo(() => {
     const nodeById = new Map(graphData.nodes.map((n) => [n.id, n]))
@@ -798,28 +761,7 @@ export function MoneyTrailPage() {
             <Upload className="h-4 w-4" /> Upload Document
           </button>
           <button
-            onClick={() =>
-              setAnalysis({
-                analysis_id: 'demo-sample-case',
-                expires_in_seconds: 3600,
-                demo_data: true,
-                case: {
-                  total_fraud_amount: 2450000,
-                  total_accounts: 18,
-                  total_transactions: 27,
-                  maximum_layer: 4,
-                },
-                accounts: [],
-                transactions: [],
-                graph: {
-                  nodes: DEMO_NODES.map((n) => ({ id: n.id, data: n })),
-                  edges: DEMO_EDGES,
-                },
-                layers: [0, 1, 2, 3, 4],
-                pages: {},
-                sections: [],
-              })
-            }
+            onClick={() => setAnalysis(buildDemoAnalysis() as any)}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-xs transition-all"
           >
             <Network className="h-4 w-4 text-emerald-600" /> Explore Sample Money Trail
@@ -898,6 +840,13 @@ export function MoneyTrailPage() {
             </button>
           </div>
 
+          {analysis?.demo_data === true && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] font-black uppercase tracking-wide text-amber-700">
+              <AlertCircle className="h-3.5 w-3.5" />
+              {DEMO_LABEL}
+            </div>
+          )}
+
           {/* Action icons */}
           <button
             title="Zoom out"
@@ -973,15 +922,25 @@ export function MoneyTrailPage() {
         </div>
       </div>
 
-      {/* Top 4 Stats Overview Cards */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {/* Top Stats Overview Cards */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 shrink-0">
             <UserRound className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-xs font-semibold text-slate-500">Total Accounts</p>
+            <p className="text-xs font-semibold text-slate-500">Transfer Accounts</p>
             <p className="mt-0.5 text-xl font-black text-slate-900">{totalAccountsCount}</p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-purple-50 text-purple-600 shrink-0">
+            <Landmark className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500">Withdrawal Events</p>
+            <p className="mt-0.5 text-xl font-black text-slate-900">{withdrawalCountTotal}</p>
           </div>
         </div>
 
@@ -996,12 +955,24 @@ export function MoneyTrailPage() {
         </div>
 
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 shrink-0">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-red-50 text-red-600 shrink-0">
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
-            <p className="text-xs font-semibold text-slate-500">Fraud Amount</p>
-            <p className="mt-0.5 text-xl font-black text-slate-900">₹ {totalAmount.toLocaleString('en-IN')}</p>
+            <p className="text-xs font-semibold text-slate-500">Reported Fraud Amount</p>
+            <p className="mt-0.5 text-xl font-black text-slate-900">
+              {reportedFraud ? `₹ ${Number(reportedFraud).toLocaleString('en-IN')}` : 'Not available in source'}
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-50 text-amber-600 shrink-0">
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500">Total Disputed Amount</p>
+            <p className="mt-0.5 text-xl font-black text-slate-900">₹ {disputedTotal.toLocaleString('en-IN')}</p>
           </div>
         </div>
 
@@ -1016,16 +987,64 @@ export function MoneyTrailPage() {
         </div>
       </div>
 
+      {/* Data Quality / Verification (compact, informational) */}
+      {(() => {
+        const dq = (analysis?.graph as any)?.validation
+        const quality = dq?.data_quality
+        const issues: string[] = dq?.issues || []
+        const notes: string[] = dq?.notes || []
+        if (!quality) return null
+        const facts: Array<{ label: string; value: string | number }> = [
+          { label: 'Records parsed', value: (analysis?.transactions?.length || 0) + (analysis?.withdrawals?.length || 0) + ((analysis as any)?.other_records?.length || 0) },
+          { label: 'Transfer transactions', value: analysis?.transactions?.length || 0 },
+          { label: 'Transfer accounts', value: analysis?.case?.total_transfer_accounts ?? totalAccountsCount },
+          { label: 'Withdrawal events', value: analysis?.case?.withdrawal_event_count ?? withdrawalCountTotal },
+          { label: 'NCRP layers found', value: (analysis?.graph as any)?.document_layers?.length || 0 },
+          { label: 'Accounts in several layers', value: quality.multi_layer_accounts ?? 0 },
+          { label: 'Accounts without a source layer', value: quality.unresolved_layer_accounts ?? 0 },
+          { label: 'Transfers without source layer', value: quality.transfer_transactions_without_layer ?? 0 },
+          { label: 'Malformed transactions', value: quality.malformed_transactions ?? 0 },
+        ]
+        return (
+          <details className="rounded-2xl border border-slate-200/80 bg-white px-5 py-3 shadow-xs">
+            <summary className="cursor-pointer text-xs font-extrabold text-slate-700 select-none">
+              Data Quality / Verification
+              <span className="ml-2 text-[11px] font-bold text-slate-400">
+                {issues.length > 0 ? `${issues.length} issue(s) found` : 'No source inconsistencies detected'}
+              </span>
+            </summary>
+            <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 md:grid-cols-4">
+              {facts.map((fact) => (
+                <div key={fact.label} className="flex items-center justify-between gap-2 text-[11px]">
+                  <span className="text-slate-500 font-semibold">{fact.label}</span>
+                  <span className="font-black text-slate-800">{fact.value}</span>
+                </div>
+              ))}
+            </div>
+            {(issues.length > 0 || notes.length > 0) && (
+              <div className="mt-3 border-t border-slate-100 pt-2.5 space-y-1 max-h-32 overflow-y-auto">
+                {issues.map((issue) => (
+                  <p key={issue} className="text-[11px] text-amber-700 font-semibold">• {issue}</p>
+                ))}
+                {notes.slice(0, 12).map((note) => (
+                  <p key={note} className="text-[11px] text-slate-500">• {note}</p>
+                ))}
+              </div>
+            )}
+          </details>
+        )
+      })()}
+
       {/* Interactive Layer Selection & Legend Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white px-5 py-3 text-xs font-bold text-slate-600 shadow-xs">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-black uppercase text-slate-400 mr-1">Highlight Trail:</span>
           {[
             { label: 'All Layers', layer: null as number | null, color: '#10B981' },
-            { label: 'L0 \u2022 Victim', layer: 0 as number | null, color: '#EF4444' },
-            // Dynamically add one button per real layer (1 to maxLayer, excluding final cash-out layer)
+            { label: 'Victim / Origin', layer: 0 as number | null, color: '#EF4444' },
+            // One button per Layer value actually present in the uploaded document
             ...Array.from({ length: maxLayer }, (_, i) => i + 1).map((l) => ({
-              label: `L${l} \u2022 Layer ${l}`,
+              label: `Layer ${l}`,
               layer: l as number | null,
               color: LAYER_EDGE_COLORS[(l - 1) % LAYER_EDGE_COLORS.length],
             })),
@@ -1365,17 +1384,23 @@ export function MoneyTrailPage() {
 
 // Sidebar Drawer Component for Node Details
 function AccountPanel({ node, onClose, onViewTransactions }: { node: any; onClose: () => void; onViewTransactions: () => void }) {
-  const layer = Number(node.layer ?? 0)
+  const rawLayer = node.layer
+  const layer = rawLayer === null || rawLayer === undefined ? null : Number(rawLayer)
   const isVictim = layer === 0
   const isFinal = Boolean(node.isFinal || node.isATM)
   const isLeaf = !isFinal && (node.connectedOut === '0' || Number(node.amountOut) === 0)
+  const documented: number[] = Array.isArray(node.documentLayers) ? node.documentLayers : []
   const layerTitle = isVictim
-    ? 'L0 • Victim Account'
+    ? 'Victim / Origin'
     : isFinal
-    ? `L${layer} • Cash-out / Final Account`
+    ? `Cash-out • ${layer !== null ? `from Layer ${layer}` : 'no layer in source'}`
+    : layer === null
+    ? 'No NCRP layer in source (unresolved)'
     : isLeaf
-    ? `L${layer} • Layer ${layer} (End of Trail)`
-    : `L${layer} • Layer ${layer}`
+    ? `Layer ${layer} (end of trail)`
+    : documented.length > 1
+    ? `Layer ${layer} (documented also in L${documented.filter((value) => value !== layer).join(', L')})`
+    : `Layer ${layer}`
 
   const badgeColor = isVictim
     ? 'bg-red-500'
@@ -1383,7 +1408,7 @@ function AccountPanel({ node, onClose, onViewTransactions }: { node: any; onClos
     ? 'bg-slate-600'
     : ''
 
-  const badgeStyle = !isVictim && !isFinal ? { backgroundColor: LAYER_EDGE_COLORS[(layer - 1) % LAYER_EDGE_COLORS.length] } : {}
+  const badgeStyle = !isVictim && !isFinal && layer !== null ? { backgroundColor: LAYER_EDGE_COLORS[(layer - 1) % LAYER_EDGE_COLORS.length] } : {}
 
   const netAmount = (node.amountIn || 0) - (node.amountOut || 0)
 
@@ -1511,6 +1536,36 @@ function EdgePanel({ edge, onClose }: { edge: any; onClose: () => void }) {
             <p className="text-[10px] font-black uppercase text-slate-400">Bank Flow</p>
             <p className="mt-1 font-bold text-slate-700">{edge.bankPair}</p>
           </div>
+
+          <div>
+            <p className="text-[10px] font-black uppercase text-slate-400">Source</p>
+            <p className="mt-1 font-bold text-slate-700">{edge.sourceLabel || 'Source not available'}</p>
+          </div>
+
+          {Array.isArray(edge.underlyingTransactions) && edge.underlyingTransactions.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase text-slate-400">
+                Transactions ({edge.underlyingTransactions.length})
+              </p>
+              <div className="mt-2 max-h-64 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+                {edge.underlyingTransactions.map((t: any, i: number) => (
+                  <div key={t.id || i} className="px-3 py-2 text-[11px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono font-bold text-slate-800">
+                        ₹{Number(t.amount || 0).toLocaleString('en-IN')}
+                      </span>
+                      {t.transaction_date && (
+                        <span className="text-slate-400">{t.transaction_date}</span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 font-mono text-[10px] text-slate-500">
+                      {t.utr_rrn || t.transaction_id || 'UTR not provided'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
